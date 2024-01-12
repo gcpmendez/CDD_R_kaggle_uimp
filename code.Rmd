@@ -1,4 +1,3 @@
-
 # ===============================================
 # Instalación y carga de paquetes necesarios
 # ===============================================
@@ -28,7 +27,6 @@ tmp <- origin_test_data
 # ===============================================
 # División de datos
 # ===============================================
-
 ```{r}
 # División de los datos
 set.seed(1234)
@@ -40,7 +38,6 @@ validation_data <- origin_train_data[-train_index, ]
 # ===============================================
 # Preprocesamiento (recipes) - Eliminación de las variable `PassengerId` y `Name` 
 # ===============================================
-
 ```{r}
 train_data_preprocessed <- train_data
 validation_data_preprocessed <- validation_data
@@ -59,10 +56,10 @@ validation_data_preprocessed <- bake(prep_rec, new_data = validation_data_prepro
 origin_test_data$Name <- NULL
 ```
 
+
 # ===============================================
 # Preprocesamiento (recipes) - Dividiendo la variable `Cabin` en tres variables nuevas `CabinDeck`, `CabinNumber` y `CabinSide`
 # ===============================================
-
 ```{r, echo=FALSE, message=FALSE, warning=FALSE}
 # Creamos una receta
 rec <- recipe(Transported ~ ., data = train_data_preprocessed)
@@ -117,7 +114,6 @@ origin_test_data <- bake(prep_rec, new_data = origin_test_data)
 ```
 
 
-
 # ===============================================
 # Comprobando los valores nulos (missing values)
 # ===============================================
@@ -150,7 +146,6 @@ origin_test_data <- bake(prep_rec, new_data = origin_test_data)
 # ===============================================
 # Precisión y factores
 # ===============================================
-
 ```{r}
 # Función para calcular la precisión de los modelos
 accuracy <- function(model) {
@@ -163,7 +158,6 @@ accuracy <- function(model) {
 # ===============================================
 # Comparación de modelos
 # ===============================================
-
 ```{r}
 library(doParallel)
 registerDoParallel(cores = 20)
@@ -182,7 +176,6 @@ logistic_regression_model <- train(Transported ~ ., data = train_data_preprocess
     method = "glm", trControl = tc)
 Sys.time() - t
 ```
-
 
 ```{r, message=FALSE, warning=FALSE}
 # Random Forest
@@ -207,12 +200,10 @@ xgboost_model <- train(Transported ~ ., data = train_data_preprocessed,
 Sys.time() - t
 ```
 
-
 ```{r}
 # Train Control
 tc <- trainControl(method = "cv", number = 5, classProbs = TRUE, seeds = set.seed(1234),allowParallel = TRUE) 
 ```
-
 
 ```{r, message=FALSE, warning=FALSE}
 # SVM
@@ -223,7 +214,6 @@ svm_model <- train(Transported ~ ., data = train_data_preprocessed,
 Sys.time() - t
 ```
 
-
 ```{r, message=FALSE, warning=FALSE}
 # ANN
 t <- Sys.time()
@@ -233,8 +223,9 @@ ann_model <- train(Transported ~ ., data = train_data_preprocessed,
 Sys.time() - t
 ```
 
-
-
+# ===============================================
+# Métricas de precisión y kappa
+# ===============================================
 ```{r}
 # Comparación de los modelos
 models <- c("Logistic Regression", "Random Forest", "XGBoost", "SVM", "ANN")
@@ -248,9 +239,8 @@ results
 
 
 # ===============================================
-# Kaggle submission I
+# Básic Kaggle submission I
 # ===============================================
-
 ```{r, echo=FALSE, message=FALSE, warning=FALSE, fig.width=6, fig.height=4, eval=FALSE}
 # Crear fichero submision.csv para subir a Kaggle
 origin_test_data$PassengerId <- tmp$PassengerId
@@ -258,12 +248,6 @@ predictions <- predict(xgboost_model, origin_test_data)
 submission <- data.frame(PassengerId = origin_test_data$PassengerId, Transported = predictions)
 write.csv(submission, file = "submission.csv", row.names = FALSE)
 ```
-
-
-
-
-
-
 
 # ===============================================
 # Preprocesamiento (recipes) - Codificación de variables categóricas - One-Hot Encoding
@@ -284,17 +268,12 @@ origin_test_data <- bake(prep_rec, new_data = origin_test_data)
 ```
 
 
-
-
-
 # ===============================================
 # XGBOOST - exploración de hiperparámetros
 # ===============================================
-
 # ===============================================
 # XGBOOST - Grid Search
 # ===============================================
-
 ```{r, message=FALSE, warning=FALSE, eval=FALSE}
 # XGBoost con hiperparámetros
 tc <- trainControl(method = "cv", number = 10, allowParallel = FALSE)
@@ -327,7 +306,6 @@ Sys.time() - t
 # ===============================================
 # XGBOOST - Random Search
 # ===============================================
-
 ```{r, message=FALSE, warning=FALSE, eval=FALSE}
 # XGBoost con hiperparámetros
 tc <- trainControl(method = "repeatedcv", repeats= 5, number = 10, search = "random", allowParallel = FALSE)
@@ -356,19 +334,16 @@ Sys.time() - t
 
 
 # ===============================================
-# Precisión
+# Precisión del modelo XGBoost con hiperparámetros
 # ===============================================
 ```{r, eval=FALSE}
 accuracy(modelXgboost_tuned)
 ```
 
 
-
-
 # ===============================================
-# Kaggle submission II
+# Kaggle submission advanced
 # ===============================================
-
 ```{r, echo=FALSE, message=FALSE, warning=FALSE, fig.width=6, fig.height=4, eval=FALSE}
 # Crear fichero submision.csv para subir a Kaggle
 origin_test_data$PassengerId <- tmp$PassengerId
@@ -378,25 +353,16 @@ write.csv(submission, file = "submission.csv", row.names = FALSE)
 ```
 
 
-
-
 # ===============================================
 # Feature selection
 # ===============================================
-
 ```{r, echo=FALSE, message=FALSE, warning=FALSE}
 # Importancia de las variables en el modelo XGBoost
 varImp(modelXgboost_tuned)
 plot(varImp(modelXgboost_tuned))
 ```
   
-```{r, message=FALSE, warning=FALSE, eval=FALSE}
-selected_vars <- importance_matrix$Feature[importance_matrix$Gain >= 0.02]
 
-# Filtrar el conjunto de datos para mantener solo las variables seleccionadas
-# Asegúrate de incluir la variable objetivo si está en el conjunto de datos
-train_data <- train_data[, c(selected_vars, "Transported")]
-```
 
 
 
