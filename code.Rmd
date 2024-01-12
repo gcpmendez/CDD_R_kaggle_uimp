@@ -1,0 +1,405 @@
+
+# ===============================================
+# Instalación y carga de paquetes necesarios
+# ===============================================
+
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
+packages <- c("caret", "recipes", "corrplot", "dplyr", "ggplot2", "RWeka",
+              "MLmetrics", "classInt", "Ckmeans.1d.dp", "pROC", "doParallel")
+
+installed_packages <- packages %in% rownames(installed.packages())
+if (any(installed_packages == FALSE)) {
+  install.packages(packages[!installed_packages])
+}
+
+invisible(lapply(packages, library, character.only = TRUE))
+```
+
+# ===============================================
+# Carga de datos
+# ===============================================
+```{r}
+origin_train_data <- read.csv("train.csv", header = TRUE, sep = ",")
+origin_test_data <- read.csv("test.csv", header = TRUE, sep = ",")
+
+tmp <- origin_test_data
+```
+
+# ===============================================
+# División de datos
+# ===============================================
+
+```{r}
+# División de los datos
+set.seed(1234)
+train_index <- createDataPartition(origin_train_data$Transported, p = 0.8, list = FALSE)
+train_data <- origin_train_data[train_index, ]
+validation_data <- origin_train_data[-train_index, ]
+```
+
+# ===============================================
+# Preprocesamiento (recipes) - Eliminación de las variable `PassengerId` y `Name` 
+# ===============================================
+
+```{r}
+train_data_preprocessed <- train_data
+validation_data_preprocessed <- validation_data
+
+# Crear una receta
+rec <- recipe(Transported ~ ., data = train_data_preprocessed)
+
+# Eliminar las variables PassengerId y Name
+rec <- rec %>%
+       step_rm(PassengerId, Name)
+
+# Preparar y aplicar el recipe
+prep_rec <- prep(rec, training = train_data_preprocessed)
+train_data_preprocessed <- bake(prep_rec, new_data = train_data_preprocessed)
+validation_data_preprocessed <- bake(prep_rec, new_data = validation_data_preprocessed)
+origin_test_data$Name <- NULL
+```
+
+# ===============================================
+# Preprocesamiento (recipes) - Dividiendo la variable `Cabin` en tres variables nuevas `CabinDeck`, `CabinNumber` y `CabinSide`
+# ===============================================
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+# Creamos una receta
+rec <- recipe(Transported ~ ., data = train_data_preprocessed)
+
+# Creamos nuevas variables
+rec <- rec %>%
+       step_mutate(
+         CabinDeck = gsub("([A-Z])/.*/.*", "\\1", Cabin),
+         CabinNumber = as.numeric(gsub("[A-Z]/([0-9]+)/.*", "\\1", Cabin)),
+         CabinSide = gsub(".*([PS])$", "\\1", Cabin)
+       ) %>%
+       step_mutate(
+         CabinNumber = cut(CabinNumber, breaks = 10, labels = FALSE)
+       ) %>%
+       step_mutate(
+         CabinNumber = as.numeric(CabinNumber)
+       )
+
+# Elliminamos la variable original
+rec <- rec %>%
+       step_rm(Cabin)
+
+prep_rec <- prep(rec, training = train_data_preprocessed)
+train_data_preprocessed <- bake(prep_rec, new_data = train_data_preprocessed)
+validation_data_preprocessed <- bake(prep_rec, new_data = validation_data_preprocessed)
+origin_test_data <- bake(prep_rec, new_data = origin_test_data)
+```
+
+
+# ===============================================
+# Preprocesamiento (recipes) - Inputación de cadenas vacias en las variables categoricas
+# ===============================================
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+
+# Creamos una receta
+rec <- recipe(Transported ~ ., data = train_data_preprocessed)
+
+# Inputación de valores nulos
+rec <- rec %>%
+       step_mutate(HomePlanet = ifelse(HomePlanet == "", NA_character_, as.character(HomePlanet))) %>%
+       step_mutate(CryoSleep = ifelse(CryoSleep == "", NA_character_, as.character(CryoSleep))) %>%
+       step_mutate(Destination = ifelse(Destination == "", NA_character_, as.character(Destination))) %>%
+       step_mutate(VIP = ifelse(VIP == "", NA_character_, as.character(VIP))) %>%
+       step_mutate(CabinDeck = ifelse(CabinDeck == "", NA_character_, as.character(CabinDeck))) %>%
+       step_mutate(CabinSide = ifelse(CabinSide == "", NA_character_, as.character(CabinSide))) 
+
+# Preparar y aplicar el recipe
+prep_rec <- prep(rec, training = train_data_preprocessed)
+train_data_preprocessed <- bake(prep_rec, new_data = train_data_preprocessed)
+validation_data_preprocessed <- bake(prep_rec, new_data = validation_data_preprocessed)
+origin_test_data <- bake(prep_rec, new_data = origin_test_data)
+```
+
+
+
+# ===============================================
+# Comprobando los valores nulos (missing values)
+# ===============================================
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+# Comprobando los valores nulos
+is.na(train_data_preprocessed)  %>% colSums()
+```
+
+# ===============================================
+# Preprocesamiento (recipes) - Inputación de valores nulos (moda y mediana)
+# ===============================================
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+
+# Creamos una receta
+rec <- recipe(Transported ~ ., data = train_data_preprocessed)
+
+# Inputación de valores nulos
+rec <- rec %>%
+       step_impute_mode(all_nominal(), -all_outcomes()) %>%
+       step_impute_median(all_numeric(), -all_outcomes())
+
+# Preparar y aplicar el recipe
+prep_rec <- prep(rec, training = train_data_preprocessed)
+train_data_preprocessed <- bake(prep_rec, new_data = train_data_preprocessed)
+validation_data_preprocessed <- bake(prep_rec, new_data = validation_data_preprocessed)
+origin_test_data <- bake(prep_rec, new_data = origin_test_data)
+```
+
+
+# ===============================================
+# Precisión y factores
+# ===============================================
+
+```{r}
+# Función para calcular la precisión de los modelos
+accuracy <- function(model) {
+  predictions <- predict(model, validation_data_preprocessed)
+  conf_matrix <- confusionMatrix(predictions, validation_data_preprocessed$Transported)
+  return(c(conf_matrix$overall["Accuracy"], conf_matrix$overall["Kappa"]))
+}
+```
+
+# ===============================================
+# Comparación de modelos
+# ===============================================
+
+```{r}
+library(doParallel)
+registerDoParallel(cores = 20)
+```
+
+```{r}
+# Train Control
+tc <- trainControl(method = "cv", number = 5, classProbs = TRUE, seeds = set.seed(1234),allowParallel = TRUE) 
+```
+
+```{r, message=FALSE, warning=FALSE}
+# Regresión Logística
+t <- Sys.time()
+set.seed(1234)
+logistic_regression_model <- train(Transported ~ ., data = train_data_preprocessed, 
+    method = "glm", trControl = tc)
+Sys.time() - t
+```
+
+
+```{r, message=FALSE, warning=FALSE}
+# Random Forest
+t <- Sys.time()
+set.seed(1234)
+random_forest_model <- train(Transported ~ ., data = train_data_preprocessed, 
+    method = "rf", trControl = tc)
+Sys.time() - t
+```
+
+```{r}
+# Train Control
+tc <- trainControl(method = "cv", number = 5, classProbs = TRUE, seeds = set.seed(1234), allowParallel = FALSE)
+```
+
+```{r, message=FALSE, warning=FALSE}
+# XGBoost
+t <- Sys.time()
+set.seed(1234)
+xgboost_model <- train(Transported ~ ., data = train_data_preprocessed, 
+    method = "xgbTree", trControl = tc, verbosity = 0, nthread = detectCores())
+Sys.time() - t
+```
+
+
+```{r}
+# Train Control
+tc <- trainControl(method = "cv", number = 5, classProbs = TRUE, seeds = set.seed(1234),allowParallel = TRUE) 
+```
+
+
+```{r, message=FALSE, warning=FALSE}
+# SVM
+t <- Sys.time()
+set.seed(1234)
+svm_model <- train(Transported ~ ., data = train_data_preprocessed, 
+    method = "svmRadial", trControl = tc)
+Sys.time() - t
+```
+
+
+```{r, message=FALSE, warning=FALSE}
+# ANN
+t <- Sys.time()
+set.seed(1234)
+ann_model <- train(Transported ~ ., data = train_data_preprocessed, 
+    method = "nnet", trControl = tc, trace = FALSE)
+Sys.time() - t
+```
+
+
+
+```{r}
+# Comparación de los modelos
+models <- c("Logistic Regression", "Random Forest", "XGBoost", "SVM", "ANN")
+accuracies <- c(accuracy(logistic_regression_model)[1], accuracy(random_forest_model)[1], 
+    accuracy(xgboost_model)[1], accuracy(svm_model)[1], accuracy(ann_model)[1])
+kappas <- c(accuracy(logistic_regression_model)[2], accuracy(random_forest_model)[2], 
+    accuracy(xgboost_model)[2], accuracy(svm_model)[2], accuracy(ann_model)[2])
+results <- data.frame(models, accuracies, kappas)
+results
+```
+
+
+# ===============================================
+# Kaggle submission I
+# ===============================================
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, fig.width=6, fig.height=4, eval=FALSE}
+# Crear fichero submision.csv para subir a Kaggle
+origin_test_data$PassengerId <- tmp$PassengerId
+predictions <- predict(xgboost_model, origin_test_data)
+submission <- data.frame(PassengerId = origin_test_data$PassengerId, Transported = predictions)
+write.csv(submission, file = "submission.csv", row.names = FALSE)
+```
+
+
+
+
+
+
+
+# ===============================================
+# Preprocesamiento (recipes) - Codificación de variables categóricas - One-Hot Encoding
+# ===============================================
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+# Creamos una receta
+rec <- recipe(Transported ~ ., data = train_data_preprocessed)
+
+# Codificación de variables categóricas - One-Hot Encoding
+rec <- rec %>%
+         step_dummy(all_nominal(), -all_outcomes())
+
+# Preparar y aplicar el recipe
+prep_rec <- prep(rec, training = train_data_preprocessed)
+train_data_preprocessed <- bake(prep_rec, new_data = train_data_preprocessed)
+validation_data_preprocessed <- bake(prep_rec, new_data = validation_data_preprocessed)
+origin_test_data <- bake(prep_rec, new_data = origin_test_data)
+```
+
+
+
+
+
+# ===============================================
+# XGBOOST - exploración de hiperparámetros
+# ===============================================
+
+# ===============================================
+# XGBOOST - Grid Search
+# ===============================================
+
+```{r, message=FALSE, warning=FALSE, eval=FALSE}
+# XGBoost con hiperparámetros
+tc <- trainControl(method = "cv", number = 10, allowParallel = FALSE)
+
+grid <- expand.grid(
+    nrounds = c(150, 300),
+    max_depth = c(5, 8),
+    eta = c(0.01, 0.2),
+    gamma = c(0, 0.2),
+    colsample_bytree = c(0.5, 0.8),
+    min_child_weight = c(1, 5),
+    subsample = c(0.6, 0.8)
+)
+
+t <- Sys.time()
+set.seed(1234)
+modelXgboost_tuned <- train(
+    Transported ~ ., 
+    data = train_data,
+    method = "xgbTree",
+    trControl = tc,
+    tuneGrid = grid,
+    nthread = detectCores(),
+    verbosity = 0
+)
+Sys.time() - t
+```
+
+
+# ===============================================
+# XGBOOST - Random Search
+# ===============================================
+
+```{r, message=FALSE, warning=FALSE, eval=FALSE}
+# XGBoost con hiperparámetros
+tc <- trainControl(method = "repeatedcv", repeats= 5, number = 10, search = "random", allowParallel = FALSE)
+
+random_grid <- list(
+    nrounds = c(100, 130, 150),
+    max_depth = c(3, 4, 5),
+    gamma = c(0.5, 1, 1.5),
+    colsample_bytree = c(0.6, 0.8, 1),
+    subsample = c(0.6, 0.8, 1)
+)
+
+t <- Sys.time()
+set.seed(1234)
+modelXgboost_tuned <- train(
+    Transported ~ ., 
+    data = train_data_preprocessed,
+    method = "xgbTree",
+    trControl = tc,
+    tuneLength = 10,
+    nthread = detectCores(),
+    verbosity = 0
+)
+Sys.time() - t
+```
+
+
+# ===============================================
+# Precisión
+# ===============================================
+```{r, eval=FALSE}
+accuracy(modelXgboost_tuned)
+```
+
+
+
+
+# ===============================================
+# Kaggle submission II
+# ===============================================
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, fig.width=6, fig.height=4, eval=FALSE}
+# Crear fichero submision.csv para subir a Kaggle
+origin_test_data$PassengerId <- tmp$PassengerId
+predictions <- predict(modelXgboost_tuned, origin_test_data)
+submission <- data.frame(PassengerId = origin_test_data$PassengerId, Transported = predictions)
+write.csv(submission, file = "submission.csv", row.names = FALSE)
+```
+
+
+
+
+# ===============================================
+# Feature selection
+# ===============================================
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+# Importancia de las variables en el modelo XGBoost
+varImp(modelXgboost_tuned)
+plot(varImp(modelXgboost_tuned))
+```
+  
+```{r, message=FALSE, warning=FALSE, eval=FALSE}
+selected_vars <- importance_matrix$Feature[importance_matrix$Gain >= 0.02]
+
+# Filtrar el conjunto de datos para mantener solo las variables seleccionadas
+# Asegúrate de incluir la variable objetivo si está en el conjunto de datos
+train_data <- train_data[, c(selected_vars, "Transported")]
+```
+
+
+
+
+
+
